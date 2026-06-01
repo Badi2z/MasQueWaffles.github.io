@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MasQueWaffles - COCINA</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+    <style>
+        body { background: #2d2f36; color: white; font-family: system-ui; padding: 20px; margin: 0; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+        .pedido { background: #3b3e47; border-radius: 20px; padding: 15px; margin: 15px 0; border-left: 8px solid #ffb347; transition: 0.2s; }
+        .pedido.listo { background: #2e7d32; border-left-color: #ffd966; }
+        .item-check { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+        .item-check label { flex: 1; cursor: pointer; }
+        .nota-general { background: #2a2c33; padding: 8px 12px; border-radius: 16px; margin: 12px 0; border-left: 4px solid #ff9800; }
+        .btn-group { margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }
+        button { background: #4caf50; border: none; color: white; padding: 8px 16px; border-radius: 40px; cursor: pointer; font-weight: bold; }
+        .btn-print { background: #2196f3; }
+        .btn-print-all { background: #ff9800; }
+        hr { border-color: #555; }
+        @media print {
+            .no-print { display: none; }
+            .pedido { break-inside: avoid; background: white; color: black; border: 1px solid #ccc; }
+            .nota-general { background: #f0f0f0; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>👨‍🍳 COCINA - MasQueWaffles 🧇
+        <button id="printAllBtn" class="btn-print-all">🖨️ Imprimir todas las comandas</button>
+    </h1>
+    <div id="pedidosContainer">Cargando pedidos...</div>
+</div>
+
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyAtUbhUZW9qZlpueY3JrYXgnkcXfHYdUc0",
+        authDomain: "masquewaffles.firebaseapp.com",
+        projectId: "masquewaffles",
+        storageBucket: "masquewaffles.firebasestorage.app",
+        messagingSenderId: "444667770238",
+        appId: "1:444667770238:web:ce3c8ccb72b713be74af2f"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    function playBeep() {
+        try {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.frequency.value = 880;
+            gainNode.gain.value = 0.3;
+            oscillator.start();
+            gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
+            oscillator.stop(audioCtx.currentTime + 0.5);
+        } catch(e) { console.log("Audio no soportado"); }
+    }
+
+    let ultimosEstados = {};
+
+    function renderPedidos() {
+        db.collection("pedidos").where("estado", "in", ["pendiente", "preparando", "listo"]).orderBy("fecha", "desc").onSnapshot(snapshot => {
+            const container = document.getElementById("pedidosContainer");
+            if (snapshot.empty) { container.innerHTML = "<p>✅ No hay pedidos activos</p>"; return; }
+            let html = "";
+            snapshot.forEach(doc => {
+                const p = doc.data();
+                const allPrepared = p.items.every(i => i.prepared === true);
+                let estadoBadge = "";
+                let claseListo = "";
+                if (p.estado === "pendiente") estadoBadge = "🟡 Pendiente";
+                else if (p.estado === "preparando") estadoBadge = "🔵 En preparación";
+                else if (p.estado === "listo") {
+                    estadoBadge = "🟢 LISTO PARA ENTREGAR";
+                    claseListo = "listo";
+                    if (ultimosEstados[doc.id] !== "listo") {
+                        playBeep();
+                        ultimosEstados[doc.id] = "listo";
+                    }
+                } else {
+                    ultimosEstados[doc.id] = p.estado;
+                }
+                html += `<div class="pedido ${claseListo}" data-id="${doc.id}">
+                            <h3>🍽️ Pedido #${p.numero}  |  Total: $${p.total}  |  Hora: ${p.hora}  |  ${estadoBadge}</h3>`;
+                if (p.notaGeneral) html += `<div class="nota-general">📝 NOTA GENERAL: ${p.notaGeneral}</div>`;
+                html += `<div class="items">`;
+                p.items.forEach((item, idx) => {
+                    const checked = item.prepared ? "checked" : "";
+                    html += `<div class="item-check">
+                                <input type="checkbox" class="item-prep" data-pedido-id="${doc.id}" data-item-idx="${idx}" ${checked}>
+                                <label><strong>${item.nombre}</strong> - $${item.precio}</label>
+                            </div>`;
+                    if (item.nota) html += `<div style="margin-left: 35px; font-size:0.8rem;">📌 Nota: ${item.nota}</div>`;
+                });
+                html += `</div><div class="btn-group">`;
+                if (allPrepared && p.estado !== "listo") {
+                    html += `<button class="marcar-listo-btn" data-id="${doc.id}">✅ Marcar todo como listo</button>`;
+                }
+                html += `<button class="print-order-btn" data-id="${doc.id}" data-numero="${p.numero}">🖨️ Imprimir comanda</button>`;
+                html += `</div></div>`;
+            });
+            container.innerHTML = html;
+
+            // Eventos checkboxes
+            document.querySelectorAll(".item-prep").forEach(cb => {
+                cb.addEventListener("change", async (e) => {
+                    const pedidoId = cb.dataset.pedidoId;
+                    const itemIdx = parseInt(cb.dataset.itemIdx);
+                    const pedidoRef = db.collection("pedidos").doc(pedidoId);
+                    const docSnap = await pedidoRef.get();
+                    const items = docSnap.data().items;
+                    items[itemIdx].prepared = cb.checked;
+                    let newEstado = docSnap.data().estado;
+                    if (newEstado === "pendiente" && items.some(i => i.prepared)) newEstado = "preparando";
+                    await pedidoRef.update({ items: items, estado: newEstado });
+                });
+            });
+
+            // Botón marcar todo listo
+            document.querySelectorAll(".marcar-listo-btn").forEach(btn => {
+                btn.addEventListener("click", async (e) => {
+                    const id = btn.dataset.id;
+                    const pedidoRef = db.collection("pedidos").doc(id);
+                    const docSnap = await pedidoRef.get();
+                    const items = docSnap.data().items.map(i => ({...i, prepared: true}));
+                    await pedidoRef.update({ items: items, estado: "listo" });
+                    alert("Pedido marcado como listo");
+                });
+            });
+
+            // Imprimir comanda individual
+            document.querySelectorAll(".print-order-btn").forEach(btn => {
+                btn.addEventListener("click", async () => {
+                    const id = btn.dataset.id;
+                    const numero = btn.dataset.numero;
+                    const doc = await db.collection("pedidos").doc(id).get();
+                    const p = doc.data();
+                    let itemsHtml = "";
+                    p.items.forEach(item => {
+                        itemsHtml += `<div>${item.nombre} x1 ................ $${item.precio}</div>`;
+                        if (item.nota) itemsHtml += `<div style="font-size:0.8rem;">📌 ${item.nota}</div>`;
+                    });
+                    const printWindow = window.open('', '_blank');
+                    printWindow.document.write(`
+                        <html><head><title>Comanda #${numero}</title>
+                        <style>body { font-family: monospace; width: 80mm; margin: 0 auto; padding: 10px; }</style>
+                        </head><body>
+                        <h2>🧇 MasQueWaffles</h2>
+                        <p>Pedido #${numero} - ${p.hora}</p><hr>${itemsHtml}<hr>
+                        <p>Nota general: ${p.notaGeneral || "Ninguna"}</p>
+                        <p>¡Gracias!</p>
+                        </body></html>
+                    `);
+                    printWindow.document.close();
+                    printWindow.print();
+                });
+            });
+        });
+    }
+
+    document.getElementById("printAllBtn").addEventListener("click", () => {
+        const pedidos = document.querySelectorAll(".pedido");
+        if (pedidos.length === 0) return alert("No hay pedidos");
+        let allHtml = "";
+        pedidos.forEach(ped => { allHtml += ped.outerHTML; });
+        const ventana = window.open('', '_blank');
+        ventana.document.write(`<html><head><title>Comandas</title><style>body { font-family: monospace; } .pedido { margin-bottom: 20px; break-after: page; }</style></head><body>${allHtml}</body></html>`);
+        ventana.document.close();
+        ventana.print();
+    });
+
+    renderPedidos();
+</script>
+</body>
+</html>
